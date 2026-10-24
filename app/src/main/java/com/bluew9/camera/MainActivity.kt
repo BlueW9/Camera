@@ -27,7 +27,9 @@ class MainActivity : AppCompatActivity() {
   var ic: ImageCapture? = null
   var vc: VideoCapture<Recorder>? = null
   var rec: Recording? = null
-  var front = false; var video = false; var useLoc = false; var delay = 0
+  var cam: Camera? = null
+  lateinit var flashBtn: Button
+  var front = false; var video = false; var useLoc = false; var delay = 0; var flash = 0
 
   override fun onCreate(b: Bundle?) {
     super.onCreate(b)
@@ -35,14 +37,25 @@ class MainActivity : AppCompatActivity() {
     pv = PreviewView(this); root.addView(pv, MATCH_PARENT, MATCH_PARENT)
     val bar = LinearLayout(this).apply {
       gravity = Gravity.CENTER; setBackgroundColor(0xCC120B1F.toInt()); setPadding(0, 24, 0, 96) }
-    fun btn(t: String, f: (Button) -> Unit) = Button(this).apply {
+    val top = LinearLayout(this).apply {
+      gravity = Gravity.CENTER; setBackgroundColor(0xCC120B1F.toInt()); setPadding(0, 16, 0, 16) }
+    fun mk(t: String, to: LinearLayout, f: (Button) -> Unit) = Button(this).apply {
       text = t; setTextColor(0xFFC9B1FF.toInt()); setBackgroundColor(0); setOnClickListener { f(this) }
-    }.also { bar.addView(it, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)) }
-    btn("Photo") { it.text = if (video) "Photo" else "Video"; video = !video; bind() }
-    btn("Timer 0") { delay = when (delay) { 0 -> 3; 3 -> 5; 5 -> 10; else -> 0 }; it.text = "Timer $delay" }
-    shutter = btn("●") { go() }.apply { textSize = 34f; setTextColor(0xFF9B6DFF.toInt()) }
-    btn("Loc off") { if (!useLoc) askLoc(); useLoc = !useLoc; it.text = if (useLoc) "Loc on" else "Loc off" }
-    btn("Flip") { front = !front; bind() }
+    }.also { to.addView(it, LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f)) }
+    flashBtn = mk("Flash off", top) { flash = (flash + 1) % 3; applyFlash() }
+    mk("Timer 0", top) { delay = when (delay) { 0 -> 3; 3 -> 5; 5 -> 10; else -> 0 }; it.text = "Timer $delay" }
+    mk("Loc off", top) { if (!useLoc) askLoc(); useLoc = !useLoc; it.text = if (useLoc) "Loc on" else "Loc off" }
+    mk("Tools", top) {
+      androidx.appcompat.app.AlertDialog.Builder(this@MainActivity)
+        .setItems(arrayOf("Blur photo", "Isolate background")) { _, i ->
+          startActivity(android.content.Intent(this@MainActivity, EditorActivity::class.java)
+            .putExtra("mode", if (i == 0) "blur" else "isolate"))
+        }.show()
+    }
+    mk("Photo", bar) { it.text = if (video) "Photo" else "Video"; video = !video; bind() }
+    shutter = mk("●", bar) { go() }.apply { textSize = 34f; setTextColor(0xFF9B6DFF.toInt()) }
+    mk("Flip", bar) { front = !front; bind() }
+    root.addView(top, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.TOP))
     root.addView(bar, FrameLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT, Gravity.BOTTOM))
     setContentView(root)
     if (ContextCompat.checkSelfPermission(this, CAMERA) == PackageManager.PERMISSION_GRANTED) bind()
@@ -72,12 +85,25 @@ class MainActivity : AppCompatActivity() {
       if (video) {
         val r = Recorder.Builder().setQualitySelector(QualitySelector.fromOrderedList(
           listOf(Quality.UHD, Quality.FHD, Quality.HD), FallbackStrategy.lowerQualityOrHigherThan(Quality.SD))).build()
-        vc = VideoCapture.withOutput(r); p.bindToLifecycle(this, sel, pre, vc)
+        vc = VideoCapture.withOutput(r); cam = p.bindToLifecycle(this, sel, pre, vc)
       } else {
         ic = ImageCapture.Builder().setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY).build()
-        p.bindToLifecycle(this, sel, pre, ic)
+        cam = p.bindToLifecycle(this, sel, pre, ic)
       }
+      applyFlash()
     }, ContextCompat.getMainExecutor(this))
+  }
+
+  // Flash tool: photo = off / auto / on (fires with the shot). Video = off / on (torch stays lit).
+  fun applyFlash() {
+    val c = cam
+    if (c == null || !c.cameraInfo.hasFlashUnit()) { flashBtn.text = "No flash"; return }
+    flashBtn.text = arrayOf("Flash off", "Flash auto", "Flash on")[flash]
+    if (video) c.cameraControl.enableTorch(flash == 2)
+    else {
+      c.cameraControl.enableTorch(false)
+      ic?.flashMode = when (flash) { 1 -> ImageCapture.FLASH_MODE_AUTO; 2 -> ImageCapture.FLASH_MODE_ON; else -> ImageCapture.FLASH_MODE_OFF }
+    }
   }
 
   fun go() {
